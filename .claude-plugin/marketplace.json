@@ -1,0 +1,7 @@
+{
+  "name": "agent-theater",
+  "owner": { "name": "OKD" },
+  "plugins": [
+    { "name": "agent-theater", "source": "./", "description": "Claudeの作業に合わせてロボットのキャラクターが動くパネル" }
+  ]
+}
