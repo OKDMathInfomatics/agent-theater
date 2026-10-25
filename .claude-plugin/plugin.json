@@ -1,0 +1,7 @@
+{
+  "name": "agent-theater",
+  "version": "0.1.2",
+  "description": "Claudeの作業に合わせてロボットのキャラクターが動くパネル",
+  "types": "./types/index.d.ts",
+  "license": "MIT"
+}
