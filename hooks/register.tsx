@@ -48,7 +48,11 @@ export const register: Register = on => {
   on('command.run', { command: 'agent-theater' }, async $ => {
     const opened = await $.ui.open({ id: PANE, title: TITLE })
 
-    return { text: opened.isPlaced ? 'エージェント劇場を開きました。' : 'この画面ではパネルを表示できません。' }
+    return {
+      text: opened.isPlaced
+        ? 'エージェント劇場を開きました。'
+        : `この画面では横のパネルを出せないため、ここに表示します。（${opened.reason}）`,
+    }
   })
 
   on('turn.start', async ($, e, next) => {
@@ -93,6 +97,36 @@ export const register: Register = on => {
     }
 
     return ended
+  })
+
+  // Where no pane is placed, the /agent-theater output row becomes a live stage.
+  on('ui.render', { component: 'CommandOutput' }, async ($, e, next) => {
+    if (e.props.command !== 'agent-theater' || e.props.isErrored) return next(e)
+    if (e.props.text.startsWith('エージェント劇場を開きました')) return next(e)
+    const st = await read($, stage)
+    if (e.surface === 'terminal') return next(e)
+    const { Box, Svg, Text } = $.ui.resolve(e)
+
+    return (
+      <Box flexDirection="column">
+        <Svg source={sceneSVG(st)} alt={CAPTION[st.scene]} isInteractive />
+        <Text dimColor>この表示は作業に合わせて動きます。スクロールで見えなくなったら /agent-theater で出し直せます。</Text>
+      </Box>
+    )
+  })
+
+  // While a turn runs, the band above the prompt shows the stage too, where the surface draws one.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const st = await read($, stage)
+    if (e.props.hasSurvey || (!e.props.isWorking && st.scene === 'idle')) return next(e)
+    if (e.surface !== 'desktop') return next(e)
+    const { Box, Svg } = $.ui.resolve(e)
+
+    return (
+      <Box flexDirection="column">
+        <Svg source={sceneSVG(st)} alt={CAPTION[st.scene]} width={300} height={250} isInteractive />
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
