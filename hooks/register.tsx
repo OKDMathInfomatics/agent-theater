@@ -119,6 +119,8 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
+    // A refused write (the person has not approved database writes yet) is tried again each turn.
+    if (!e.agentId) liveOff = false
     if (!e.agentId) await go($, 'recv')
 
     return next(e)
