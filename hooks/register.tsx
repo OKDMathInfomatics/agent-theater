@@ -5,6 +5,8 @@ import type { Scene, Stage } from '../types'
 import { CAPTION, sceneSVG } from './scene'
 
 const PANE = 'agent-theater'
+// The live page (opened in its own window) reads this document and animates it.
+const LIVE_URL = 'https://claude.ai/artifact/8BzHBRE6nCcDVA3EZmnZWN'
 const TITLE = 'エージェント劇場'
 
 const INITIAL: Stage = { scene: 'idle', from: 'idle', subs: 0, err: false, tool: '', seq: 0 }
@@ -30,8 +32,69 @@ function classify(tool: string, input: Record<string, unknown>): Scene {
   return 'run'
 }
 
+type Entry = { scene: Scene; from: Scene; subs: number; err: boolean; tool: string; seq: number; at: number }
+let liveVersion: number | undefined
+let liveOff = false
+let recent: Entry[] = []
+let pending: Stage | undefined
+let pushing = false
+
+function versionIn(text: string): number | undefined {
+  const all = text.match(/version (\d+)/g)
+  const last = all?.[all.length - 1]
+  return last ? Number(last.slice(8)) : undefined
+}
+
+async function pushLive($: EngineInterface, st: Stage) {
+  if (liveOff) return
+  pending = st
+  if (pushing) return
+  pushing = true
+  try {
+    while (pending) {
+      const s = pending
+      pending = undefined
+      const entry: Entry = { scene: s.scene, from: s.from, subs: s.subs, err: s.err, tool: s.tool, seq: s.seq, at: Date.now() }
+      recent = [entry, ...recent].slice(0, 6)
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const ran = await $.tool.call({
+          tool: 'ArtifactData',
+          action: 'set',
+          url: LIVE_URL,
+          collection: 'live',
+          doc_id: 'now',
+          data: { ...entry, recent },
+          ...(liveVersion ? { if_version: liveVersion } : {}),
+        })
+        const text = 'deny' in ran && ran.deny !== undefined ? ran.deny : String(ran.text ?? '')
+        const done = text.match(/now at version (\d+)/)
+        if (done) {
+          liveVersion = Number(done[1])
+          break
+        }
+        const seen = versionIn(text)
+        if (seen === undefined) {
+          liveOff = true
+          return
+        }
+        liveVersion = seen
+      }
+    }
+  } catch {
+    liveOff = true
+  } finally {
+    pushing = false
+  }
+}
+
+async function change($: EngineInterface, fn: (s: Stage) => Stage) {
+  const st = await update($, stage, fn)
+  void pushLive($, st)
+  return st
+}
+
 function go($: EngineInterface, scene: Scene, tool = '') {
-  return update($, stage, s => ({ ...s, from: s.scene, scene, tool, err: false, seq: s.seq + 1 }))
+  return change($, s => ({ ...s, from: s.scene, scene, tool, err: false, seq: s.seq + 1 }))
 }
 
 export const register: Register = on => {
@@ -65,19 +128,20 @@ export const register: Register = on => {
     // A subagent's own calls leave the main character where it is.
     if (e.agentId) return next(e)
     const tool = String(e.tool)
+    if (tool === 'ArtifactData' && (e as unknown as { url?: string }).url === LIVE_URL) return next(e)
     const scene = classify(tool, e as unknown as Record<string, unknown>)
     if (scene === 'spawn') {
-      await update($, stage, s => ({ ...s, from: s.scene, scene, tool, err: false, subs: s.subs + 1, seq: s.seq + 1 }))
+      await change($, s => ({ ...s, from: s.scene, scene, tool, err: false, subs: s.subs + 1, seq: s.seq + 1 }))
       try {
         return await next(e)
       } finally {
-        await update($, stage, s => ({ ...s, subs: Math.max(0, s.subs - 1), seq: s.seq + 1 }))
+        await change($, s => ({ ...s, subs: Math.max(0, s.subs - 1), seq: s.seq + 1 }))
       }
     }
     await go($, scene, tool)
     const ran = await next(e)
     if (ran.deny === undefined && ran.isError === true) {
-      await update($, stage, s => ({ ...s, from: s.scene, err: true, seq: s.seq + 1 }))
+      await change($, s => ({ ...s, from: s.scene, err: true, seq: s.seq + 1 }))
     }
 
     return ran
@@ -88,10 +152,10 @@ export const register: Register = on => {
     if (!(e as { agentId?: string }).agentId) {
       const answered = e.reason === 'answer'
       const end: Scene = answered ? 'done' : 'idle'
-      await update($, stage, s => ({ ...s, from: s.scene, scene: end, tool: '', err: false, subs: 0, seq: s.seq + 1 }))
+      await change($, s => ({ ...s, from: s.scene, scene: end, tool: '', err: false, subs: 0, seq: s.seq + 1 }))
       if (answered) {
         $.clock.after(4500, () => {
-          void update($, stage, (s): Stage => (s.scene === 'done' ? { ...s, from: 'done', scene: 'idle', seq: s.seq + 1 } : s))
+          void change($, (s): Stage => (s.scene === 'done' ? { ...s, from: 'done', scene: 'idle', seq: s.seq + 1 } : s))
         })
       }
     }
